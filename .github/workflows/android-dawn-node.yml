@@ -57,7 +57,7 @@ jobs:
       - name: Install build tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake ninja-build python3 git curl unzip
+          sudo apt-get install -y cmake ninja-build python3 git curl unzip protobuf-compiler
 
       - name: Set up Node 22 (headers source; NAPI keeps it loadable on Node 26)
         uses: actions/setup-node@v4
@@ -112,6 +112,7 @@ jobs:
             -DDAWN_USE_X11=OFF \
             -DDAWN_USE_WAYLAND=OFF \
             -DDAWN_SUPPORTS_CXX_MODULES=OFF \
+            -DPROTOC_EXECUTABLE=/usr/bin/protoc \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_CXX_VISIBILITY_PRESET=hidden \
             -DCMAKE_VISIBILITY_INLINES_HIDDEN=1
