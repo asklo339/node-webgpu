@@ -95,6 +95,17 @@ jobs:
           gclient metrics --opt-out || true
           gclient sync
 
+      - name: Fetch Android libnode.so (link target for the NAPI imports)
+        # dawn.node must have no undefined symbols under the NDK linker, so
+        # its napi_* imports link against the same Node runtime the app
+        # ships (already loaded RTLD_GLOBAL by MainActivity + the Rust host,
+        # so they resolve at require() time).
+        run: |
+          mkdir -p android-libs
+          curl -sSL -o android-libs/libnode.so \
+            "https://github.com/asklo339/node-webgpu/releases/download/android-deps/libnode.so"
+          ls -la android-libs/
+
       - name: Configure (NDK toolchain, same flags as build.js + Android)
         run: |
           # depot_tools ships an unbootstrapped `ninja` shim that shadows the
@@ -113,6 +124,7 @@ jobs:
             -DDAWN_USE_WAYLAND=OFF \
             -DDAWN_SUPPORTS_CXX_MODULES=OFF \
             -DPROTOC_EXECUTABLE=/usr/bin/protoc \
+            -DCMAKE_SHARED_LINKER_FLAGS="$GITHUB_WORKSPACE/android-libs/libnode.so" \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_CXX_VISIBILITY_PRESET=hidden \
             -DCMAKE_VISIBILITY_INLINES_HIDDEN=1
