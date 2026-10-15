@@ -1,0 +1,122 @@
+# Builds dawn.node for Android arm64-v8a (NDK) so the RAGE engine's
+# wgpu_worker.js gets GPU frames on-device.
+#
+# node-webgpu ships desktop prebuilds only (no Android), and its build.js
+# hardcodes a host-only cmake configure, so this workflow replays build.js
+# manually with the NDK toolchain instead of calling it:
+#   git submodule (pinned Dawn) -> gclient sync -> cmake (android.toolchain)
+#   -> ninja dawn.node -> upload dist/linux-arm64/dawn.node
+#
+# The dist path is linux-arm64, not android-arm64: on Android
+# process.platform is 'linux', so the package's index.js resolves
+# dist/<platform>-<arch>/dawn.node -> dist/linux-arm64/dawn.node.
+#
+# Run: Actions tab -> "Android dawn.node" -> Run workflow (or push to the
+# android-dawn-node branch). Download the `dawn-node-android-arm64` artifact
+# and copy dawn.node to the phone at
+# files/gtav/node_modules/webgpu/dist/linux-arm64/dawn.node
+# (via the app's "GTAV files" DocumentsProvider), then restart the app.
+name: Android dawn.node
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [android-dawn-node]
+    paths: [.github/workflows/android-dawn-node.yml]
+
+concurrency:
+  group: android-dawn-node
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    env:
+      DEBIAN_FRONTEND: noninteractive
+      DEPOT_TOOLS_UPDATE: '0'
+      NDK_VERSION: 27.2.12479018
+      ANDROID_API: 26
+
+    steps:
+      - name: Checkout node-webgpu (v0.6.2, matches the staged JS wrapper)
+        uses: actions/checkout@v4
+        with:
+          ref: v0.6.2
+
+      - name: Add this workflow's own commit (keeps dist path + docs in sync)
+        run: git log --oneline -3
+
+      - name: Free disk space (Dawn sync + build need ~15 GB)
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /opt/hostedtoolcache/CodeQL /usr/local/share/boost 2>/dev/null || true
+          sudo apt-get clean
+          df -h /
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build python3 git curl unzip
+
+      - name: Set up Node 22 (headers source; NAPI keeps it loadable on Node 26)
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Set up depot_tools
+        run: |
+          git clone --depth 1 https://chromium.googlesource.com/chromium/tools/depot_tools.git \
+            "$HOME/depot_tools"
+          echo "$HOME/depot_tools" >> "$GITHUB_PATH"
+
+      - name: Set up Android SDK + NDK
+        uses: android-actions/setup-android@v3
+      - name: Install NDK
+        run: |
+          sdkmanager --install "ndk;${NDK_VERSION}" "platforms;android-${ANDROID_API}"
+          echo "ANDROID_NDK_HOME=${ANDROID_HOME}/ndk/${NDK_VERSION}" >> "$GITHUB_ENV"
+
+      - name: Fetch pinned Dawn (submodule) + third-party deps
+        run: |
+          git submodule update --init
+          cd third_party/dawn
+          cp scripts/standalone-with-node.gclient .gclient
+          gclient metrics --opt-out || true
+          gclient sync
+
+      - name: Configure (NDK toolchain, same flags as build.js + Android)
+        run: |
+          mkdir -p out/cmake-release-android
+          cd out/cmake-release-android
+          cmake "$GITHUB_WORKSPACE/third_party/dawn" -GNinja \
+            -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM="android-${ANDROID_API}" \
+            -DANDROID_STL=c++_shared \
+            -DDAWN_BUILD_NODE_BINDINGS=1 \
+            -DDAWN_USE_X11=OFF \
+            -DDAWN_USE_WAYLAND=OFF \
+            -DDAWN_SUPPORTS_CXX_MODULES=OFF \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_CXX_VISIBILITY_PRESET=hidden \
+            -DCMAKE_VISIBILITY_INLINES_HIDDEN=1
+
+      - name: Build dawn.node
+        run: |
+          cd out/cmake-release-android
+          ninja dawn.node
+
+      - name: Stage dist/linux-arm64/dawn.node
+        run: |
+          mkdir -p dist/linux-arm64
+          cp out/cmake-release-android/dawn.node dist/linux-arm64/dawn.node
+          ls -la dist/linux-arm64/
+          file dist/linux-arm64/dawn.node || true
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dawn-node-android-arm64
+          path: dist/linux-arm64/dawn.node
+          retention-days: 30
